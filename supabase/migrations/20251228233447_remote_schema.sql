@@ -111,19 +111,30 @@ CREATE OR REPLACE FUNCTION "public"."handle_new_user"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     AS $$
 BEGIN
-  INSERT INTO public.users (id, full_name, mobile,email)
+  INSERT INTO public.users (
+    id,
+    full_name,
+    mobile,
+    email,
+    company_name,
+    company_address
+  )
   VALUES (
     NEW.id,
     NEW.raw_user_meta_data->>'full_name',
     NEW.raw_user_meta_data->>'phone',
-    NEW.email
+    NEW.email,
+    NEW.raw_user_meta_data->>'company_name',
+    NEW.raw_user_meta_data->>'company_address'
   )
   ON CONFLICT (id) DO UPDATE
   SET
-    full_name = COALESCE(EXCLUDED.full_name, public.users.full_name),
-    mobile    = COALESCE(EXCLUDED.mobile,    public.users.mobile),
-    email    = COALESCE(EXCLUDED.email,    public.users.email),
-    updated_at = NOW(); -- if you have this column
+    full_name        = COALESCE(EXCLUDED.full_name, public.users.full_name),
+    mobile           = COALESCE(EXCLUDED.mobile,    public.users.mobile),
+    email            = COALESCE(EXCLUDED.email,     public.users.email),
+    company_name     = COALESCE(EXCLUDED.company_name, public.users.company_name),
+    company_address  = COALESCE(EXCLUDED.company_address, public.users.company_address),
+    updated_at       = NOW(); -- if this column exists
   RETURN NEW;
 END;
 $$;
