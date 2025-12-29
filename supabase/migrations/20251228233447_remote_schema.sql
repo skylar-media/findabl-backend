@@ -13,13 +13,6 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 
-CREATE EXTENSION IF NOT EXISTS "pg_net" WITH SCHEMA "extensions";
-
-
-
-
-
-
 COMMENT ON SCHEMA "public" IS 'standard public schema';
 
 
@@ -80,14 +73,14 @@ ALTER TYPE "public"."pricing_type" OWNER TO "postgres";
 
 
 CREATE TYPE "public"."subscription_status" AS ENUM (
+    'trialing',
     'active',
     'canceled',
     'incomplete',
     'incomplete_expired',
     'past_due',
-    'paused',
-    'trialing',
-    'unpaid'
+    'unpaid',
+    'paused'
 );
 
 
@@ -116,34 +109,24 @@ ALTER FUNCTION "public"."handle_new_auth_user"() OWNER TO "postgres";
 
 CREATE OR REPLACE FUNCTION "public"."handle_new_user"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
-    AS $$BEGIN
-  INSERT INTO public.users (
-    id,
-    full_name,
-    mobile,
-    email,
-    company_name,
-    company_address
-  )
+    AS $$
+BEGIN
+  INSERT INTO public.users (id, full_name, mobile,email)
   VALUES (
     NEW.id,
     NEW.raw_user_meta_data->>'full_name',
     NEW.raw_user_meta_data->>'phone',
-    NEW.email,
-    NEW.raw_user_meta_data->>'company_name',
-    NEW.raw_user_meta_data->>'company_address'
+    NEW.email
   )
   ON CONFLICT (id) DO UPDATE
   SET
-    full_name        = COALESCE(EXCLUDED.full_name, public.users.full_name),
-    mobile           = COALESCE(EXCLUDED.mobile,    public.users.mobile),
-    email            = COALESCE(EXCLUDED.email,     public.users.email),
-    company_name     = COALESCE(EXCLUDED.company_name, public.users.company_name),
-    company_address  = COALESCE(EXCLUDED.company_address, public.users.company_address),
-    updated_at       = NOW(); -- if this column exists
-
+    full_name = COALESCE(EXCLUDED.full_name, public.users.full_name),
+    mobile    = COALESCE(EXCLUDED.mobile,    public.users.mobile),
+    email    = COALESCE(EXCLUDED.email,    public.users.email),
+    updated_at = NOW(); -- if you have this column
   RETURN NEW;
-END;$$;
+END;
+$$;
 
 
 ALTER FUNCTION "public"."handle_new_user"() OWNER TO "postgres";
@@ -151,19 +134,16 @@ ALTER FUNCTION "public"."handle_new_user"() OWNER TO "postgres";
 
 CREATE OR REPLACE FUNCTION "public"."handle_update_auth_user"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
-    AS $$BEGIN
-  UPDATE public.users
-  SET
-    email           = NEW.email,
-    name            = COALESCE(NEW.raw_user_meta_data->>'full_name', name),
-    mobile          = COALESCE(NEW.raw_user_meta_data->>'phone', mobile),
-    company_name    = COALESCE(NEW.raw_user_meta_data->>'company_name', company_name),
-    company_address = COALESCE(NEW.raw_user_meta_data->>'company_address', company_address),
-    updated_at      = NOW()
-  WHERE id = NEW.id;
-
-  RETURN NEW;
-END;$$;
+    AS $$
+begin
+  update public.users
+  set email = new.email,
+      name = coalesce(new.raw_user_meta_data->>'full_name', name),
+      updated_at = now()
+  where id = new.id;
+  return new;
+end;
+$$;
 
 
 ALTER FUNCTION "public"."handle_update_auth_user"() OWNER TO "postgres";
@@ -512,9 +492,7 @@ CREATE TABLE IF NOT EXISTS "public"."users" (
     "payment_method" "jsonb",
     "mobile" "text",
     "updated_at" timestamp without time zone,
-    "email" "text",
-    "company_name" "text",
-    "company_address" character varying
+    "email" "text"
 );
 
 
@@ -654,7 +632,7 @@ ALTER TABLE ONLY "public"."customers"
 
 
 ALTER TABLE ONLY "public"."onboarding_forms"
-    ADD CONSTRAINT "onboarding_forms_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
+    ADD CONSTRAINT "onboarding_forms_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON UPDATE CASCADE ON DELETE CASCADE;
 
 
 
@@ -701,7 +679,7 @@ CREATE POLICY "Allow public read-only access." ON "public"."products" FOR SELECT
 
 
 
-CREATE POLICY "Anyone can ready the news" ON "public"."news" FOR SELECT USING (true);
+CREATE POLICY "Anyone can insert" ON "public"."user_audit" FOR INSERT WITH CHECK (true);
 
 
 
@@ -713,39 +691,15 @@ CREATE POLICY "Anyone can view" ON "public"."faq" FOR SELECT USING (true);
 
 
 
-CREATE POLICY "Can only view own subs data." ON "public"."subscriptions" FOR SELECT TO "authenticated" USING (("auth"."uid"() = "user_id"));
+CREATE POLICY "Can only view own subs data." ON "public"."subscriptions" FOR SELECT USING (("auth"."uid"() = "user_id"));
 
 
 
-CREATE POLICY "Can update own user data." ON "public"."users" FOR UPDATE USING (("auth"."uid"() = "id")) WITH CHECK (("auth"."uid"() = "id"));
+CREATE POLICY "Can update own user data." ON "public"."users" FOR UPDATE USING (("auth"."uid"() = "id"));
 
 
 
 CREATE POLICY "Can view own user data." ON "public"."users" FOR SELECT USING (("auth"."uid"() = "id"));
-
-
-
-CREATE POLICY "User can insert" ON "public"."onboarding_status" FOR INSERT TO "authenticated" WITH CHECK (("auth"."uid"() = "user_id"));
-
-
-
-CREATE POLICY "User can insert their own form" ON "public"."onboarding_forms" FOR INSERT TO "authenticated" WITH CHECK (("auth"."uid"() = "user_id"));
-
-
-
-CREATE POLICY "User can read" ON "public"."onboarding_status" FOR SELECT TO "authenticated" USING (("auth"."uid"() = "user_id"));
-
-
-
-CREATE POLICY "User can read their own form" ON "public"."onboarding_forms" FOR SELECT TO "authenticated" USING (("auth"."uid"() = "user_id"));
-
-
-
-CREATE POLICY "User can update" ON "public"."onboarding_status" FOR UPDATE TO "authenticated" USING (("auth"."uid"() = "user_id")) WITH CHECK (("auth"."uid"() = "user_id"));
-
-
-
-CREATE POLICY "User can update their own form" ON "public"."onboarding_forms" FOR UPDATE TO "authenticated" USING (("auth"."uid"() = "user_id")) WITH CHECK (("auth"."uid"() = "user_id"));
 
 
 
@@ -780,7 +734,15 @@ ALTER TABLE "public"."customers" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."faq" ENABLE ROW LEVEL SECURITY;
 
 
+CREATE POLICY "init own status" ON "public"."onboarding_status" FOR INSERT WITH CHECK (("auth"."uid"() = "user_id"));
+
+
+
 ALTER TABLE "public"."news" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "news.read.public" ON "public"."news" FOR SELECT USING (true);
+
 
 
 ALTER TABLE "public"."onboarding_forms" ENABLE ROW LEVEL SECURITY;
@@ -795,10 +757,23 @@ ALTER TABLE "public"."prices" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."products" ENABLE ROW LEVEL SECURITY;
 
 
-ALTER TABLE "public"."subscription_audit" ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "read own form" ON "public"."onboarding_forms" FOR SELECT USING (("auth"."uid"() = "user_id"));
+
+
+
+CREATE POLICY "read own status" ON "public"."onboarding_status" FOR SELECT USING (("auth"."uid"() = "user_id"));
+
 
 
 ALTER TABLE "public"."subscriptions" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "update own form" ON "public"."onboarding_forms" FOR UPDATE USING (("auth"."uid"() = "user_id"));
+
+
+
+CREATE POLICY "update own status" ON "public"."onboarding_status" FOR UPDATE USING (("auth"."uid"() = "user_id"));
+
 
 
 ALTER TABLE "public"."user_audit" ENABLE ROW LEVEL SECURITY;
@@ -807,11 +782,20 @@ ALTER TABLE "public"."user_audit" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."users" ENABLE ROW LEVEL SECURITY;
 
 
+CREATE POLICY "write own form" ON "public"."onboarding_forms" FOR INSERT WITH CHECK (("auth"."uid"() = "user_id"));
+
+
+
 
 
 ALTER PUBLICATION "supabase_realtime" OWNER TO "postgres";
 
 
+ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."prices";
+
+
+
+ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."products";
 
 
 
@@ -1107,14 +1091,10 @@ GRANT ALL ON TABLE "public"."products" TO "service_role";
 
 
 
-GRANT ALL ON TABLE "public"."subscription_audit" TO "anon";
-GRANT ALL ON TABLE "public"."subscription_audit" TO "authenticated";
 GRANT ALL ON TABLE "public"."subscription_audit" TO "service_role";
 
 
 
-GRANT ALL ON SEQUENCE "public"."subscription_audit_audit_id_seq" TO "anon";
-GRANT ALL ON SEQUENCE "public"."subscription_audit_audit_id_seq" TO "authenticated";
 GRANT ALL ON SEQUENCE "public"."subscription_audit_audit_id_seq" TO "service_role";
 
 
@@ -1204,8 +1184,38 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 
 
 
+drop extension if exists "pg_net";
+
+revoke delete on table "public"."subscription_audit" from "anon";
+
+revoke insert on table "public"."subscription_audit" from "anon";
+
+revoke references on table "public"."subscription_audit" from "anon";
+
+revoke select on table "public"."subscription_audit" from "anon";
+
+revoke trigger on table "public"."subscription_audit" from "anon";
+
+revoke truncate on table "public"."subscription_audit" from "anon";
+
+revoke update on table "public"."subscription_audit" from "anon";
+
+revoke delete on table "public"."subscription_audit" from "authenticated";
+
+revoke insert on table "public"."subscription_audit" from "authenticated";
+
+revoke references on table "public"."subscription_audit" from "authenticated";
+
+revoke select on table "public"."subscription_audit" from "authenticated";
+
+revoke trigger on table "public"."subscription_audit" from "authenticated";
+
+revoke truncate on table "public"."subscription_audit" from "authenticated";
+
+revoke update on table "public"."subscription_audit" from "authenticated";
+
 CREATE TRIGGER on_auth_user_created AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
-CREATE TRIGGER on_auth_user_updated AFTER UPDATE OF raw_user_meta_data, email ON auth.users FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+CREATE TRIGGER on_auth_user_updated AFTER UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
 
